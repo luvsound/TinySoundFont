@@ -138,7 +138,7 @@ TSFDEF void tsf_set_output(tsf* f, enum TSFOutputMode outputmode, int samplerate
 //   bank: instrument bank number (alternative to preset_index)
 //   preset_number: preset number (alternative to preset_index)
 //   (bank_note_on returns 0 if preset does not exist, otherwise 1)
-TSFDEF void tsf_note_on(tsf* f, int preset_index, int key, float vel);
+TSFDEF void tsf_note_on(tsf* f, int preset_index, int key, float vel, double frac);
 TSFDEF int  tsf_bank_note_on(tsf* f, int bank, int preset_number, int key, float vel);
 
 // Stop playing a note
@@ -191,6 +191,9 @@ TSFDEF void tsf_channel_note_on(tsf* f, int channel, int key, float vel);
 TSFDEF void tsf_channel_note_off(tsf* f, int channel, int key);
 TSFDEF void tsf_channel_note_off_all(tsf* f, int channel); //end with sustain and release
 TSFDEF void tsf_channel_sounds_off_all(tsf* f, int channel); //end immediatly
+
+// MTS wrapper for channel note on
+TSFDEF void tsf_channel_mts_note_on(tsf* f, int channel, double key, float vel);
 
 // Apply a MIDI control change to the channel (not all controllers are supported!)
 TSFDEF void tsf_channel_midi_control(tsf* f, int channel, int controller, int control_value);
@@ -404,6 +407,7 @@ struct tsf_voice
 {
 	int playingPreset, playingKey, playingChannel;
 	struct tsf_region* region;
+    double mts_offset;
 	double pitchInputTimecents, pitchOutputFactor;
 	double sourceSamplePosition;
 	float  noteGainDB, panFactorLeft, panFactorRight;
@@ -940,7 +944,7 @@ static void tsf_voice_endquick(struct tsf_voice* v, float outSampleRate)
 
 static void tsf_voice_calcpitchratio(struct tsf_voice* v, float pitchShift, float outSampleRate)
 {
-	double note = v->playingKey + v->region->transpose + v->region->tune / 100.0;
+	double note = v->playingKey + v->mts_offset + v->region->transpose + v->region->tune / 100.0;
 	double adjustedPitch = v->region->pitch_keycenter + (note - v->region->pitch_keycenter) * (v->region->pitch_keytrack / 100.0);
 	if (pitchShift) adjustedPitch += pitchShift;
 	v->pitchInputTimecents = adjustedPitch * 100.0;
@@ -1225,7 +1229,7 @@ TSFDEF void tsf_set_output(tsf* f, enum TSFOutputMode outputmode, int samplerate
 	f->globalGainDB = global_gain_db;
 }
 
-TSFDEF void tsf_note_on(tsf* f, int preset_index, int key, float vel)
+TSFDEF void tsf_note_on(tsf* f, int preset_index, int key, float vel, double frac)
 {
 	int midiVelocity = (int)(vel * 127), voicePlayIndex;
 	struct tsf_region *region, *regionEnd;
@@ -1260,6 +1264,7 @@ TSFDEF void tsf_note_on(tsf* f, int preset_index, int key, float vel)
 		voice->region = region;
 		voice->playingPreset = preset_index;
 		voice->playingKey = key;
+        voice->mts_offset = frac;
 		voice->playIndex = voicePlayIndex;
 		voice->noteGainDB = f->globalGainDB - region->attenuation - tsf_gainToDecibels(1.0f / vel);
 
@@ -1304,7 +1309,7 @@ TSFDEF int tsf_bank_note_on(tsf* f, int bank, int preset_number, int key, float 
 {
 	int preset_index = tsf_get_presetindex(f, bank, preset_number);
 	if (preset_index == -1) return 0;
-	tsf_note_on(f, preset_index, key, vel);
+	tsf_note_on(f, preset_index, key, vel, 0);
 	return 1;
 }
 
@@ -1533,7 +1538,14 @@ TSFDEF void tsf_channel_note_on(tsf* f, int channel, int key, float vel)
 {
 	if (!f->channels || channel >= f->channels->channelNum) return;
 	f->channels->activeChannel = channel;
-	tsf_note_on(f, f->channels->channels[channel].presetIndex, key, vel);
+	tsf_note_on(f, f->channels->channels[channel].presetIndex, key, vel, 0);
+}
+
+TSFDEF void tsf_channel_mts_note_on(tsf* f, int channel, double key, float vel)
+{
+	if (!f->channels || channel >= f->channels->channelNum) return;
+	f->channels->activeChannel = channel;
+	tsf_note_on(f, f->channels->channels[channel].presetIndex, key, vel, key-(int)key);
 }
 
 TSFDEF void tsf_channel_note_off(tsf* f, int channel, int key)
